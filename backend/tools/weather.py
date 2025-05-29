@@ -15,7 +15,7 @@ from fastmcp import FastMCP
 mcp = FastMCP("Weather Tool")
 
 # Configuration
-WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
+WEATHERAPI_KEY = "548519825d9f4b2e8f3172147252705"
 WEATHERAPI_BASE_URL = "https://api.weatherapi.com/v1"
 
 if not WEATHERAPI_KEY:

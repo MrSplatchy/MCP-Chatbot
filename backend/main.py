@@ -1,225 +1,165 @@
-from fastapi import FastAPI, HTTPException, WebSocket
-from utils.ollama_client import OllamaChatClient
-
-from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
-from typing import Dict, Any, Optional
 from utils.tool_manager import ToolManager
+from utils.ollama_client import OllamaChatClient
 
-# Configure logging
+# Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
-app = FastAPI(title="Multi-Tool MCP Server", version="1.0.0")
+# Variables globales
+MODEL = "mistral"
+ollama_bot = OllamaChatClient(model=MODEL)
+tool_manager = None
 
-# Add CORS middleware
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global tool_manager
+    
+    # 🚀 Démarrage
+    logger.info("🚀 Démarrage du serveur...")
+    tool_manager = ToolManager("tools")
+    await tool_manager.load_all_tools()
+    
+    if tool_manager.is_ready():
+        stats = tool_manager.get_stats()
+        logger.info(f"✅ {stats['tools_loaded']} outils chargés avec {stats['total_functions']} fonctions")
+    else:
+        logger.warning("⚠️  Aucun outil chargé")
+    
+    yield
+    
+    # 🔴 Arrêt
+    logger.info("🔴 Arrêt du serveur...")
+    if tool_manager:
+        await tool_manager.shutdown_all()
+
+# Application FastAPI
+app = FastAPI(
+    title="AI Tool Server", 
+    description="Serveur d'IA avec outils MCP",
+    lifespan=lifespan
+)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize tool manager
-tool_manager = ToolManager()
-
-# Pydantic models
-class ToolExecutionRequest(BaseModel):
-    tool_server: str  # e.g., "calculator_tool"
-    function_name: str  # e.g., "add"
-    parameters: Dict[str, Any]
-
-class ToolExecutionResponse(BaseModel):
-    success: bool
-    result: Any = None
-    error: str = None
-    tool_server: str = None
-    function_name: str = None
-
-# API Routes
 @app.get("/")
 async def root():
+    """Page d'accueil avec infos du serveur"""
+    if not tool_manager:
+        return {"status": "starting", "message": "Serveur en cours de démarrage..."}
+    
+    stats = tool_manager.get_stats()
     return {
-        "message": "Multi-Tool MCP Server Running",
-        "loaded_tools": len(tool_manager.loaded_tools),
-        "available_endpoints": [
-            "/tools - List all tools",
-            "/tools/{tool_name} - Get specific tool info",
-            "/execute - Execute a tool function",
-            "/ws - WebSocket connection",
-            "/debug/tools-directory - Debug tools path"
-        ]
+        "status": "ready" if tool_manager.is_ready() else "no_tools",
+        "model": MODEL,
+        **stats
     }
 
-#? The MODEL will be replaced with a choose option from the frontend, just do not forget about it.
-MODEL = "mistral"
-ollama_bot = OllamaChatClient(model=MODEL)  # ou llama3
-
-
-
 @app.get("/tools")
-async def list_all_tools():
-    """Get all available tools organized by tool server"""
+async def list_tools():
+    """Liste tous les outils disponibles"""
+    if not tool_manager:
+        return {"error": "ToolManager non initialisé"}
+    
     return {
         "tools": tool_manager.get_all_tools(),
-        "loaded_servers": list(tool_manager.loaded_tools.keys())
+        "stats": tool_manager.get_stats()
     }
 
 @app.get("/tools/{tool_name}")
-async def get_tool_details(tool_name: str):
-    """Get detailed information about a specific tool server"""
-    tool_info = tool_manager.get_tool_info(tool_name)
-    if not tool_info:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+async def get_tool_info(tool_name: str):
+    """Informations détaillées sur un outil"""
+    if not tool_manager:
+        return {"error": "ToolManager non initialisé"}
+    
+    info = tool_manager.get_tool_info(tool_name)
+    if not info:
+        return {"error": f"Outil '{tool_name}' non trouvé"}
     
     return {
         "tool_name": tool_name,
-        "available_functions": tool_info["tools"],
-        "server_info": {
-            "name": tool_info["name"],
-            "function_count": len(tool_info["tools"])
-        }
+        "functions": info.get("functions", []),
+        "available": True
     }
-
-@app.post("/execute", response_model=ToolExecutionResponse)
-async def execute_tool_function(request: ToolExecutionRequest):
-    """Execute a specific function from a tool server"""
-    try:
-        result = await tool_manager.execute_tool(
-            request.tool_server,
-            request.function_name,
-            request.parameters
-        )
-        
-        return ToolExecutionResponse(
-            success=True,
-            result=result,
-            tool_server=request.tool_server,
-            function_name=request.function_name
-        )
-        
-    except Exception as e:
-        logger.error(f"Tool execution error: {e}")
-        return ToolExecutionResponse(
-            success=False,
-            error=str(e),
-            tool_server=request.tool_server,
-            function_name=request.function_name
-        )
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_chat(websocket: WebSocket):
+    """WebSocket pour chat avec l'IA"""
     await websocket.accept()
-    logger.info("✅ WebSocket connection established")
-
     chat_history = []
-
+    
+    # Message de bienvenue
+    await websocket.send_text(json.dumps({
+        "type": "info",
+        "message": f"🤖 Connecté! Modèle: {MODEL}",
+        "tools_available": tool_manager.is_ready() if tool_manager else False
+    }))
+    
     try:
         while True:
+            # Recevoir le message
             data = await websocket.receive_text()
-            logger.info(f"📩 Message received: {data}")
             message = json.loads(data)
-
-            if message.get("type") == "execute_tool":
-                logger.info(f"⚙️ Executing tool: {message.get('tool_server')} -> {message.get('function_name')}")
+            
+            if message.get("type") == "chat":
+                user_prompt = message.get("prompt", "")
+                chat_history.append({"role": "user", "content": user_prompt})
+                
                 try:
-                    result = await tool_manager.execute_tool(
-                        message["tool_server"],
-                        message["function_name"],
-                        message.get("parameters", {})
-                    )
-                    logger.info("✅ Tool execution succeeded")
+                    # Chat avec outils disponibles
+                    available_tools = tool_manager.get_all_tools() if tool_manager else {}
+                    response = await ollama_bot.chat(chat_history, available_tools)
+                    
+                    chat_history.append({"role": "assistant", "content": response})
+                    
                     await websocket.send_text(json.dumps({
-                        "type": "execution_result",
-                        "success": True,
-                        "result": result,
-                        "tool_server": message["tool_server"],
-                        "function_name": message["function_name"]
+                        "type": "chat_response",
+                        "response": response,
+                        "success": True
                     }))
+                    
                 except Exception as e:
-                    logger.error(f"❌ Tool execution failed: {e}")
+                    logger.error(f"Erreur chat: {e}")
                     await websocket.send_text(json.dumps({
-                        "type": "execution_result",
-                        "success": False,
-                        "error": str(e),
-                        "tool_server": message.get("tool_server"),
-                        "function_name": message.get("function_name")
+                        "type": "error",
+                        "message": f"Erreur: {str(e)}",
+                        "success": False
                     }))
-
-            elif message.get("type") == "list_tools":
-                logger.info("📚 Listing all tools")
-                tools = tool_manager.get_all_tools()
+            
+            # 
+            elif message.get("type") == "reset":
+                chat_history = []
                 await websocket.send_text(json.dumps({
-                    "type": "tools_list",
-                    "tools": tools
+                    "type": "reset_ok",
+                    "message": "💬 Conversation réinitialisée"
                 }))
-
-            elif message.get("type") == "chat":
-                prompt = message.get("prompt")
-                if prompt:
-                    logger.info(f"🧠 Chat prompt: {prompt}")
-                    chat_history.append({"role": "user", "content": prompt})
-                    try:
-                        response = await ollama_bot.chat(chat_history)
-                        chat_history.append({"role": "assistant", "content": response})
-                        logger.info(f"🗨️ Bot response: {response}")
-                        await websocket.send_text(json.dumps({
-                            "type": "chat_response",
-                            "success": True,
-                            "response": response
-                        }))
-                    except Exception as e:
-                        logger.error(f"❌ Chatbot error: {e}")
-                        await websocket.send_text(json.dumps({
-                            "type": "chat_response",
-                            "success": False,
-                            "error": str(e)
-                        }))
+            
+            elif message.get("type") == "tools_status":
+                stats = tool_manager.get_stats() if tool_manager else {}
+                await websocket.send_text(json.dumps({
+                    "type": "tools_status",
+                    **stats
+                }))
+                
     except Exception as e:
-        logger.error(f"💥 WebSocket connection error: {e}")
-
-@app.get("/debug/tools-directory")
-async def debug_tools_directory():
-    """Debug endpoint to check tools directory resolution"""
-    return tool_manager.get_tools_directory_info()
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "loaded_tools": len(tool_manager.loaded_tools),
-        "tool_servers": list(tool_manager.loaded_tools.keys())
-    }
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup logic
-    logger.info("=== Multi-Tool MCP Server Starting ===")
-    logger.info(f"Tools directory: {tool_manager.tools_directory}")
-    logger.info("Discovering and loading MCP tools...")
-    await tool_manager.discover_and_load_tools()
-    logger.info(f"✓ Loaded {len(tool_manager.loaded_tools)} tool servers")
-    logger.info("=== Server Ready ===")
-    
-    yield  # This is where the application runs
-    
-    # Shutdown logic
-    logger.info("Shutting down all MCP tools...")
-    await tool_manager.shutdown_all()
-    logger.info("=== Server Shutdown Complete ===")
+        logger.error(f"Erreur WebSocket: {e}")
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
-        host="localhost",
-        port=8000,
+        "main:app", 
+        host="localhost", 
+        port=8000, 
         reload=True,
         log_level="info"
     )

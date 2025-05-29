@@ -1,15 +1,5 @@
 {
     "files.exclude": {
-        "backend/**/__pycache__/": true,
-        "backend/**/*.py[oc]": true,
-        "backend/**/build/": true,
-        "backend/**/dist/": true,
-        "backend/**/wheels/": true,
-        "backend/**/*.egg-info": true,
-        "backend/**/.venv": true,
-        "backend/.venv/**/*": true,
-        "backend/**/.python-version": true,
-        "backend/**/pyproject.toml": true,
-        "backend/**/uv.lock": true
+        "backend/.venv/**/*": true
     }
 }
