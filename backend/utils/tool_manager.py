@@ -14,7 +14,11 @@ class ToolManager:
     """Gestionnaire d'outils MCP simplifié avec debugging amélioré"""
     
     def __init__(self, tools_directory: str = "tools"):
-        self.tools_directory = (Path(__file__).parent.parent / tools_directory).resolve()
+        print("🛠️ tools_directory =", tools_directory)
+        print("📁 Résolu en =", Path(tools_directory).resolve())
+        print("📂 Contenu =", list(Path(tools_directory).resolve().glob("*.py")))
+
+        self.tools_directory = Path(tools_directory).resolve()
         self.loaded_tools: Dict[str, Any] = {}
         
         logger.info(f"ToolManager initialisé avec le dossier: {self.tools_directory.absolute()}")

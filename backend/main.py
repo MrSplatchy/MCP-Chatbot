@@ -5,6 +5,8 @@ import json
 import logging
 from utils.tool_manager import ToolManager
 from utils.ollama_client import OllamaChatClient
+import os
+from pathlib import Path
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +23,7 @@ async def lifespan(app: FastAPI):
     
     # 🚀 Démarrage
     logger.info("🚀 Démarrage du serveur...")
-    tool_manager = ToolManager("tools")
+    tool_manager = ToolManager(str(Path(__file__).parent / "tools"))
     await tool_manager.load_all_tools()
     
     if tool_manager.is_ready():
@@ -159,7 +161,8 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app", 
         host="localhost", 
-        port=8000, 
+        port=8002, 
         reload=True,
-        log_level="info"
+        log_level="info",
+        root_path=""
     )
