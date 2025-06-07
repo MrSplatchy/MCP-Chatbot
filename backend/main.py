@@ -23,7 +23,9 @@ async def lifespan(app: FastAPI):
     
     # 🚀 Démarrage
     logger.info("🚀 Démarrage du serveur...")
-    tool_manager = ToolManager(str(Path(__file__).parent / "tools"))
+    tools_path = Path(__file__).parent / "tools"
+    print(f"🔍 Looking for tools in: {tools_path.resolve()}")
+    tool_manager = ToolManager(str(tools_path))
     await tool_manager.load_all_tools()
     
     if tool_manager.is_ready():
